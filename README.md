@@ -54,6 +54,11 @@ Download location control:
 - CLI parameter: `--output-dir /path/to/downloads`
 - Environment variable: `SCROBLOAD_OUTPUT_DIR=/path/to/downloads`
 
+Delete protection (enabled by default):
+
+- If you manually delete a previously downloaded track file, Scrobload remembers that and will **not** download it again.
+- To disable this behavior and allow re-downloading deleted tracks, pass: `--redownload-deleted`
+
 Example:
 
 ```bash
@@ -169,4 +174,5 @@ PKGBUILD assets:
 
 - Matching is best-effort (`artist + title` normalization).
 - Downloads come from YouTube search results (`ytsearch1`), so exact versions can vary.
+- Download tracking metadata is stored in `OUTPUT_DIR/.scrobload_state.json`.
 - Use responsibly and in line with your local laws/platform terms.

@@ -17,6 +17,7 @@ import requests
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 DEFAULT_OUTPUT_DIR = os.getenv("SCROBLOAD_OUTPUT_DIR", "downloads")
+STATE_FILE_NAME = ".scrobload_state.json"
 
 
 def require_package(import_name: str, package_name: str):
@@ -41,6 +42,11 @@ class Track:
     @property
     def query(self) -> str:
         return f"{self.artist} - {self.title}"
+
+    @property
+    def key_str(self) -> str:
+        artist, title = self.key
+        return f"{artist}||{title}"
 
 
 def normalize_text(value: str) -> str:
@@ -179,12 +185,46 @@ def build_liked_index(providers: Sequence[str], ytmusic_auth: str) -> set[tuple[
     return liked
 
 
-def download_tracks(tracks: Iterable[Track], output_dir: Path, dry_run: bool) -> int:
+def load_state(state_file: Path) -> dict:
+    if not state_file.exists():
+        return {"downloads": {}}
+
+    try:
+        payload = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"downloads": {}}
+
+    if not isinstance(payload, dict):
+        return {"downloads": {}}
+
+    downloads = payload.get("downloads")
+    if not isinstance(downloads, dict):
+        payload["downloads"] = {}
+
+    return payload
+
+
+def save_state(state_file: Path, state: dict) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def download_tracks(
+    tracks: Iterable[Track],
+    output_dir: Path,
+    dry_run: bool,
+    prevent_redownload_deleted: bool,
+) -> tuple[int, int]:
     yt_dlp_module = require_package("yt_dlp", "yt-dlp")
     YoutubeDL = yt_dlp_module.YoutubeDL
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    state_file = output_dir / STATE_FILE_NAME
+    state = load_state(state_file)
+    downloads_state: dict[str, str] = state.setdefault("downloads", {})
+
     downloaded = 0
+    skipped_deleted = 0
 
     ydl_opts = {
         "quiet": False,
@@ -198,6 +238,20 @@ def download_tracks(tracks: Iterable[Track], output_dir: Path, dry_run: bool) ->
 
     with YoutubeDL(ydl_opts) as ydl:
         for index, track in enumerate(tracks, start=1):
+            previous_path_raw = downloads_state.get(track.key_str)
+            previous_path = Path(previous_path_raw) if previous_path_raw else None
+
+            if previous_path and previous_path.exists():
+                print(f"[download {index}] {track.artist} - {track.title}")
+                print("           already downloaded, skipping")
+                continue
+
+            if prevent_redownload_deleted and previous_path and not previous_path.exists():
+                print(f"[download {index}] {track.artist} - {track.title}")
+                print("           previously removed file detected, skipping")
+                skipped_deleted += 1
+                continue
+
             query = f"ytsearch1:{track.query} audio"
             print(f"[download {index}] {track.artist} - {track.title}")
             if dry_run:
@@ -208,8 +262,22 @@ def download_tracks(tracks: Iterable[Track], output_dir: Path, dry_run: bool) ->
             result = ydl.extract_info(query, download=True)
             if result:
                 downloaded += 1
+                resolved = result
+                if isinstance(result, dict) and result.get("entries"):
+                    entries = result.get("entries") or []
+                    if entries:
+                        resolved = entries[0]
 
-    return downloaded
+                if isinstance(resolved, dict):
+                    try:
+                        downloads_state[track.key_str] = str(Path(ydl.prepare_filename(resolved)).resolve())
+                    except Exception:
+                        pass
+
+    if not dry_run:
+        save_state(state_file, state)
+
+    return downloaded, skipped_deleted
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -264,6 +332,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=900,
         help="Seconds between daemon polling cycles (default: 900)",
     )
+    parser.add_argument(
+        "--redownload-deleted",
+        action="store_true",
+        help="Disable delete protection and allow tracks you manually removed to be downloaded again",
+    )
 
     args = parser.parse_args(argv)
 
@@ -305,16 +378,18 @@ def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
             "liked_only": bool(args.liked_only),
         }
 
-    downloaded_count = download_tracks(
+    downloaded_count, skipped_deleted = download_tracks(
         tracks=selected_tracks,
         output_dir=Path(args.output_dir),
         dry_run=args.dry_run,
+        prevent_redownload_deleted=not args.redownload_deleted,
     )
 
     summary: dict[str, int | bool] = {
         "scrobbles_seen": len(scrobbles),
         "tracks_selected": len(selected_tracks),
         "download_attempted": downloaded_count,
+        "skipped_deleted": skipped_deleted,
         "liked_only": bool(args.liked_only),
     }
     print("\nSummary:")
