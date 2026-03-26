@@ -4,7 +4,7 @@ pkgrel=1
 pkgdesc="Download recent Last.fm scrobbles (optionally only liked songs)"
 arch=('any')
 url="https://example.com/scrobload"
-license=('GPL2')
+license=('GPL3')
 depends=('bash' 'python' 'python-pip' 'python-virtualenv' 'systemd')
 source=(
   "app.py"
