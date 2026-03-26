@@ -214,6 +214,7 @@ def download_tracks(
     output_dir: Path,
     dry_run: bool,
     prevent_redownload_deleted: bool,
+    audio_format: str,
 ) -> tuple[int, int]:
     yt_dlp_module = require_package("yt_dlp", "yt-dlp")
     YoutubeDL = yt_dlp_module.YoutubeDL
@@ -234,6 +235,13 @@ def download_tracks(
         "ignoreerrors": True,
         "nooverwrites": True,
         "restrictfilenames": True,
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": audio_format,
+                "preferredquality": "192",
+            }
+        ],
     }
 
     with YoutubeDL(ydl_opts) as ydl:
@@ -270,7 +278,9 @@ def download_tracks(
 
                 if isinstance(resolved, dict):
                     try:
-                        downloads_state[track.key_str] = str(Path(ydl.prepare_filename(resolved)).resolve())
+                        prepared_path = Path(ydl.prepare_filename(resolved)).resolve()
+                        final_path = prepared_path.with_suffix(f".{audio_format}")
+                        downloads_state[track.key_str] = str(final_path)
                     except Exception:
                         pass
 
@@ -337,11 +347,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Disable delete protection and allow tracks you manually removed to be downloaded again",
     )
+    parser.add_argument(
+        "--audio-format",
+        default="mp3",
+        help="Audio file extension/codec for downloads (default: mp3), e.g. mp3, ogg, opus, m4a, flac",
+    )
 
     args = parser.parse_args(argv)
 
     if not args.lastfm_api_key:
         parser.error("Missing Last.fm API key. Provide --lastfm-api-key or LASTFM_API_KEY env var.")
+
+    args.audio_format = args.audio_format.lower().strip().lstrip(".")
+    if not args.audio_format or not re.fullmatch(r"[a-z0-9]+", args.audio_format):
+        parser.error("Invalid --audio-format. Use letters/numbers only, e.g. mp3, ogg, opus, m4a.")
 
     return args
 
@@ -383,6 +402,7 @@ def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
         output_dir=Path(args.output_dir),
         dry_run=args.dry_run,
         prevent_redownload_deleted=not args.redownload_deleted,
+        audio_format=args.audio_format,
     )
 
     summary: dict[str, int | bool] = {

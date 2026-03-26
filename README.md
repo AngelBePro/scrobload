@@ -54,6 +54,11 @@ Download location control:
 - CLI parameter: `--output-dir /path/to/downloads`
 - Environment variable: `SCROBLOAD_OUTPUT_DIR=/path/to/downloads`
 
+Audio format control (default: `mp3`):
+
+- CLI parameter: `--audio-format mp3`
+- You can set other formats supported by ffmpeg/yt-dlp postprocessing (examples: `ogg`, `opus`, `m4a`, `flac`)
+
 Delete protection (enabled by default):
 
 - If you manually delete a previously downloaded track file, Scrobload remembers that and will **not** download it again.
@@ -62,7 +67,7 @@ Delete protection (enabled by default):
 Example:
 
 ```bash
-SCROBLOAD_OUTPUT_DIR="/srv/music/scrobload" python app.py --lastfm-user YOUR_LASTFM_USERNAME
+SCROBLOAD_OUTPUT_DIR="/srv/music/scrobload" python app.py --lastfm-user YOUR_LASTFM_USERNAME --audio-format ogg
 ```
 
 ---
