@@ -59,6 +59,12 @@ Audio format control (default: `mp3`):
 - CLI parameter: `--audio-format mp3`
 - You can set other formats supported by ffmpeg/yt-dlp postprocessing (examples: `ogg`, `opus`, `m4a`, `flac`)
 
+Metadata tagging for media servers (Navidrome/Jellyfin/Plex):
+
+- Downloaded files are tagged with `title`, `artist`, `albumartist`, and `album` (when available from Last.fm scrobbles).
+- This helps media servers categorize tracks under artist/album views.
+- Requires `ffmpeg` to be available on your system.
+
 Delete protection (enabled by default):
 
 - If you manually delete a previously downloaded track file, Scrobload remembers that and will **not** download it again.

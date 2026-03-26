@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import importlib
 import time
@@ -209,6 +210,54 @@ def save_state(state_file: Path, state: dict) -> None:
     state_file.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def apply_metadata_tags(file_path: Path, track: Track) -> None:
+    """Write artist/title/album metadata so media servers can categorize tracks."""
+    if not file_path.exists():
+        return
+
+    tmp_path = file_path.with_suffix(file_path.suffix + ".tagtmp")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(file_path),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-metadata",
+        f"title={track.title}",
+        "-metadata",
+        f"artist={track.artist}",
+        "-metadata",
+        f"albumartist={track.artist}",
+    ]
+
+    if track.album:
+        cmd.extend(["-metadata", f"album={track.album}"])
+
+    cmd.append(str(tmp_path))
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"[metadata] failed for {file_path.name}: {result.stderr.strip()}")
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            return
+
+        tmp_path.replace(file_path)
+    except FileNotFoundError:
+        print("[metadata] ffmpeg not found; skipping metadata tagging")
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[metadata] unexpected error for {file_path.name}: {exc}")
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
 def download_tracks(
     tracks: Iterable[Track],
     output_dir: Path,
@@ -280,6 +329,7 @@ def download_tracks(
                     try:
                         prepared_path = Path(ydl.prepare_filename(resolved)).resolve()
                         final_path = prepared_path.with_suffix(f".{audio_format}")
+                        apply_metadata_tags(final_path, track)
                         downloads_state[track.key_str] = str(final_path)
                     except Exception:
                         pass
