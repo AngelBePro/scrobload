@@ -1,0 +1,26 @@
+pkgname=scrobload
+pkgver=__VERSION__
+pkgrel=1
+pkgdesc="Download recent Last.fm scrobbles (optionally only liked songs)"
+arch=('any')
+url="https://example.com/scrobload"
+license=('MIT')
+depends=('bash' 'python' 'python-pip' 'python-virtualenv' 'systemd')
+source=(
+  "app.py"
+  "requirements.txt"
+  "scrobload"
+  "scrobload.service"
+  "scrobload.timer"
+  "scrobload.install"
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+install=scrobload.install
+
+package() {
+  install -Dm644 "${srcdir}/app.py" "${pkgdir}/usr/lib/scrobload/app.py"
+  install -Dm644 "${srcdir}/requirements.txt" "${pkgdir}/usr/lib/scrobload/requirements.txt"
+  install -Dm755 "${srcdir}/scrobload" "${pkgdir}/usr/bin/scrobload"
+  install -Dm644 "${srcdir}/scrobload.service" "${pkgdir}/usr/lib/systemd/system/scrobload.service"
+  install -Dm644 "${srcdir}/scrobload.timer" "${pkgdir}/usr/lib/systemd/system/scrobload.timer"
+}

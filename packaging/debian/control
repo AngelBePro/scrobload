@@ -1,0 +1,10 @@
+Package: scrobload
+Version: __VERSION__
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Scrobload Maintainers <maintainers@example.com>
+Depends: bash, python3, python3-venv, python3-pip, systemd
+Description: Download recent Last.fm scrobbles (optionally only liked songs)
+ Scrobload fetches your recent Last.fm scrobbles and downloads tracks.
+ It can filter only songs liked in Spotify and/or YouTube Music.
