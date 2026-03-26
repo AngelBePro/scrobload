@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import importlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -191,6 +192,7 @@ def download_tracks(tracks: Iterable[Track], output_dir: Path, dry_run: bool) ->
         "format": "bestaudio/best",
         "outtmpl": str(output_dir / "%(uploader)s - %(title)s [%(id)s].%(ext)s"),
         "ignoreerrors": True,
+        "nooverwrites": True,
         "restrictfilenames": True,
     }
 
@@ -251,6 +253,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Print what would be downloaded without actually downloading",
     )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run continuously in the background, polling for new scrobbles",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=900,
+        help="Seconds between daemon polling cycles (default: 900)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -260,9 +273,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return args
 
 
-def main(argv: Sequence[str]) -> int:
-    args = parse_args(argv)
-
+def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
     providers = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
     if args.liked_only and not providers:
         raise RuntimeError("--liked-only requires at least one provider in --providers")
@@ -287,7 +298,12 @@ def main(argv: Sequence[str]) -> int:
 
     if not selected_tracks:
         print("No tracks to download after filtering.")
-        return 0
+        return {
+            "scrobbles_seen": len(scrobbles),
+            "tracks_selected": 0,
+            "download_attempted": 0,
+            "liked_only": bool(args.liked_only),
+        }
 
     downloaded_count = download_tracks(
         tracks=selected_tracks,
@@ -295,7 +311,7 @@ def main(argv: Sequence[str]) -> int:
         dry_run=args.dry_run,
     )
 
-    summary = {
+    summary: dict[str, int | bool] = {
         "scrobbles_seen": len(scrobbles),
         "tracks_selected": len(selected_tracks),
         "download_attempted": downloaded_count,
@@ -303,7 +319,28 @@ def main(argv: Sequence[str]) -> int:
     }
     print("\nSummary:")
     print(json.dumps(summary, indent=2))
-    return 0
+    return summary
+
+
+def main(argv: Sequence[str]) -> int:
+    args = parse_args(argv)
+
+    if not args.daemon:
+        run_once(args)
+        return 0
+
+    print(f"[daemon] started (poll interval: {args.poll_interval}s)")
+    cycle = 0
+    while True:
+        cycle += 1
+        print(f"\n[daemon] cycle {cycle}")
+        try:
+            run_once(args)
+        except Exception as exc:
+            print(f"[daemon] cycle error: {exc}")
+
+        print(f"[daemon] sleeping {args.poll_interval}s")
+        time.sleep(args.poll_interval)
 
 
 if __name__ == "__main__":

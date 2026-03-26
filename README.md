@@ -39,6 +39,16 @@ Dry run:
 python app.py --lastfm-user YOUR_LASTFM_USERNAME --liked-only --dry-run
 ```
 
+Background/daemon mode (continuous polling):
+
+```bash
+python app.py \
+  --lastfm-user YOUR_LASTFM_USERNAME \
+  --liked-only \
+  --daemon \
+  --poll-interval 900
+```
+
 Download location control:
 
 - CLI parameter: `--output-dir /path/to/downloads`
@@ -96,6 +106,13 @@ Useful flags:
 - `--all-scrobbles`
 - `--providers spotify,ytmusic`
 - `--ytmusic-auth headers_auth.json`
+
+To run as a long-running background process with systemd,
+set daemon args in `/etc/scrobload.env`, e.g.:
+
+```bash
+SCROBLOAD_ARGS="--lastfm-user YOUR_LASTFM_USERNAME --liked-only --daemon --poll-interval 900 --output-dir /var/lib/scrobload/downloads"
+```
 
 After install:
 
