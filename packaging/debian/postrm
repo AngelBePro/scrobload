@@ -1,8 +1,0 @@
-#!/bin/bash
-set -e
-
-if [ -x /bin/systemctl ]; then
-  systemctl daemon-reload >/dev/null 2>&1 || true
-fi
-
-exit 0
