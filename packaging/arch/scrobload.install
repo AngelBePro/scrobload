@@ -1,0 +1,45 @@
+post_install() {
+  getent group scrobload >/dev/null 2>&1 || groupadd -r scrobload
+  getent passwd scrobload >/dev/null 2>&1 || useradd -r -g scrobload -d /var/lib/scrobload -s /usr/bin/nologin scrobload
+
+  mkdir -p /var/lib/scrobload/downloads
+  chown -R scrobload:scrobload /var/lib/scrobload
+
+  if [[ ! -f /etc/scrobload.env ]]; then
+    cat >/etc/scrobload.env <<'EOF_ENV'
+# Required:
+LASTFM_API_KEY=
+
+# Spotify (needed if providers include spotify):
+SPOTIPY_CLIENT_ID=
+SPOTIPY_CLIENT_SECRET=
+SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
+
+# Runtime args consumed by systemd service:
+SCROBLOAD_ARGS="--lastfm-user CHANGE_ME --liked-only --providers spotify,ytmusic --ytmusic-auth /usr/lib/scrobload/headers_auth.json --output-dir /var/lib/scrobload/downloads"
+EOF_ENV
+    chmod 600 /etc/scrobload.env
+  fi
+
+  python -m venv /var/lib/scrobload/venv
+  /var/lib/scrobload/venv/bin/pip install --upgrade pip
+  /var/lib/scrobload/venv/bin/pip install -r /usr/lib/scrobload/requirements.txt
+  chown -R scrobload:scrobload /var/lib/scrobload
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable scrobload.timer >/dev/null 2>&1 || true
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  systemctl stop scrobload.timer >/dev/null 2>&1 || true
+  systemctl disable scrobload.timer >/dev/null 2>&1 || true
+  systemctl stop scrobload.service >/dev/null 2>&1 || true
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}

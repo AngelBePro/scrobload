@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+if [ -x /bin/systemctl ]; then
+  systemctl stop scrobload.timer >/dev/null 2>&1 || true
+  systemctl disable scrobload.timer >/dev/null 2>&1 || true
+  systemctl stop scrobload.service >/dev/null 2>&1 || true
+fi
+
+exit 0

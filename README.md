@@ -14,6 +14,128 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Ubuntu server install (easy 24/7)
+
+This repo includes scripts for system-wide install + uninstall using systemd.
+
+### Install
+
+From this repo directory:
+
+```bash
+chmod +x scripts/install_ubuntu.sh scripts/uninstall_ubuntu.sh
+sudo ./scripts/install_ubuntu.sh --lastfm-user YOUR_LASTFM_USERNAME
+```
+
+Optional install flags:
+
+- `--interval 15min` (or `1h`, etc.)
+- `--all-scrobbles` (disable liked-only mode)
+- `--providers spotify,ytmusic`
+- `--ytmusic-auth headers_auth.json`
+
+After install:
+
+1. Edit credentials in `/etc/scrobload.env`
+2. Run test job:
+
+```bash
+sudo systemctl start scrobload.service
+```
+
+3. Check timer:
+
+```bash
+sudo systemctl status scrobload.timer
+```
+
+4. See logs:
+
+```bash
+sudo journalctl -u scrobload.service -n 100 --no-pager
+```
+
+### Uninstall
+
+```bash
+sudo ./scripts/uninstall_ubuntu.sh
+```
+
+Also delete downloaded files:
+
+```bash
+sudo ./scripts/uninstall_ubuntu.sh --purge-downloads
+```
+
+## Packaging / release artifacts
+
+You can build both package formats from this repo:
+
+- Debian: `.deb`
+- Arch: `.pkg.tar.zst` (PKGBUILD-compatible)
+
+Make scripts executable first:
+
+```bash
+chmod +x scripts/build_deb.sh scripts/build_arch_pkg.sh scripts/release_packages.sh
+```
+
+### Build .deb
+
+```bash
+./scripts/build_deb.sh
+```
+
+Output:
+
+- `dist/scrobload_<version>_all.deb`
+
+### Build Arch package
+
+```bash
+./scripts/build_arch_pkg.sh
+```
+
+Behavior:
+
+- If `makepkg` is available, it builds from `packaging/arch/PKGBUILD.in` (rendered with current `VERSION`)
+- If `makepkg` is not available, it creates a fallback `.pkg.tar.zst` archive
+
+Output:
+
+- `dist/scrobload-<version>-1-any.pkg.tar.zst`
+
+### Build both artifacts
+
+```bash
+./scripts/release_packages.sh
+```
+
+### Publish a GitHub Release (tag + assets)
+
+The repo includes a helper script:
+
+```bash
+chmod +x scripts/create_github_release.sh
+GITHUB_TOKEN=YOUR_TOKEN ./scripts/create_github_release.sh AngelBePro/scrobload
+```
+
+What it does:
+
+- Reads version from `VERSION` (e.g. `0.1.0`) and tags `v0.1.0`
+- Pushes/updates that tag on `origin`
+- Creates a GitHub Release via API
+- Uploads both artifacts from `dist/`:
+  - `scrobload_<version>_all.deb`
+  - `scrobload-<version>-1-any.pkg.tar.zst`
+
+### PKGBUILD files
+
+- Template: `packaging/arch/PKGBUILD.in`
+- Install hooks: `packaging/arch/scrobload.install`
+
+On Arch, you can also copy these into a packaging directory and run `makepkg -f` directly.
+
 ## Required credentials
 
 ### Last.fm

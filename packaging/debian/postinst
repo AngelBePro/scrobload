@@ -1,0 +1,36 @@
+#!/bin/bash
+set -e
+
+if ! id -u scrobload >/dev/null 2>&1; then
+  adduser --system --group --home /var/lib/scrobload --no-create-home scrobload
+fi
+
+mkdir -p /var/lib/scrobload/downloads
+chown -R scrobload:scrobload /var/lib/scrobload
+
+if [ ! -f /etc/scrobload.env ]; then
+  cat >/etc/scrobload.env <<'EOF_ENV'
+# Required:
+LASTFM_API_KEY=
+
+# Spotify (needed if providers include spotify):
+SPOTIPY_CLIENT_ID=
+SPOTIPY_CLIENT_SECRET=
+SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
+
+# Runtime args consumed by systemd service:
+SCROBLOAD_ARGS="--lastfm-user CHANGE_ME --liked-only --providers spotify,ytmusic --ytmusic-auth /usr/lib/scrobload/headers_auth.json --output-dir /var/lib/scrobload/downloads"
+EOF_ENV
+  chmod 600 /etc/scrobload.env
+fi
+
+python3 -m venv /var/lib/scrobload/venv
+/var/lib/scrobload/venv/bin/pip install --upgrade pip
+/var/lib/scrobload/venv/bin/pip install -r /usr/lib/scrobload/requirements.txt
+chown -R scrobload:scrobload /var/lib/scrobload
+
+systemctl daemon-reload || true
+
+if [ -x /bin/systemctl ]; then
+  systemctl enable scrobload.timer >/dev/null 2>&1 || true
+fi
