@@ -15,6 +15,7 @@ import requests
 
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+DEFAULT_OUTPUT_DIR = os.getenv("SCROBLOAD_OUTPUT_DIR", "downloads")
 
 
 def require_package(import_name: str, package_name: str):
@@ -242,8 +243,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="downloads",
-        help="Directory where downloaded files will be written",
+        default=DEFAULT_OUTPUT_DIR,
+        help="Directory where downloaded files will be written (or set SCROBLOAD_OUTPUT_DIR)",
     )
     parser.add_argument(
         "--dry-run",

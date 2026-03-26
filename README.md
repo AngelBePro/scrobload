@@ -39,6 +39,17 @@ Dry run:
 python app.py --lastfm-user YOUR_LASTFM_USERNAME --liked-only --dry-run
 ```
 
+Download location control:
+
+- CLI parameter: `--output-dir /path/to/downloads`
+- Environment variable: `SCROBLOAD_OUTPUT_DIR=/path/to/downloads`
+
+Example:
+
+```bash
+SCROBLOAD_OUTPUT_DIR="/srv/music/scrobload" python app.py --lastfm-user YOUR_LASTFM_USERNAME
+```
+
 ---
 
 ## 2) Credentials
@@ -49,6 +60,12 @@ python app.py --lastfm-user YOUR_LASTFM_USERNAME --liked-only --dry-run
 
 ```bash
 export LASTFM_API_KEY="your_lastfm_api_key"
+```
+
+### Optional app env vars
+
+```bash
+export SCROBLOAD_OUTPUT_DIR="/path/to/downloads"
 ```
 
 ### Spotify (only if using provider `spotify`)
