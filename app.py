@@ -215,7 +215,9 @@ def apply_metadata_tags(file_path: Path, track: Track) -> None:
     if not file_path.exists():
         return
 
-    tmp_path = file_path.with_suffix(file_path.suffix + ".tagtmp")
+    # Keep the original media extension so ffmpeg can infer the output muxer.
+    # Example: "song.mp3" -> "song.tagtmp.mp3" (not "song.mp3.tagtmp").
+    tmp_path = file_path.with_name(f"{file_path.stem}.tagtmp{file_path.suffix}")
 
     cmd = [
         "ffmpeg",
@@ -327,12 +329,26 @@ def download_tracks(
 
                 if isinstance(resolved, dict):
                     try:
-                        prepared_path = Path(ydl.prepare_filename(resolved)).resolve()
-                        final_path = prepared_path.with_suffix(f".{audio_format}")
+                        # Use track info for filename instead of YouTube video metadata
+                        # This prevents metadata mismatch when yt-dlp downloads a different song
+                        safe_artist = re.sub(r'[<>:"/\\|?*]', '_', track.artist)
+                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', track.title)
+                        filename = f"{safe_artist} - {safe_title}.{audio_format}"
+                        final_path = (output_dir / filename).resolve()
+                        
+                        # Move the downloaded file to our desired location
+                        downloaded_id = resolved.get('id', '')
+                        if downloaded_id:
+                            # Find the file that was just downloaded
+                            for f in output_dir.glob(f"*[{downloaded_id}]*"):
+                                if f.suffix == f".{audio_format}" or f.suffix in ['.mp3', '.m4a', '.ogg', '.opus', '.flac']:
+                                    f.rename(final_path)
+                                    break
+                        
                         apply_metadata_tags(final_path, track)
                         downloads_state[track.key_str] = str(final_path)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[download] error processing file: {e}")
 
     if not dry_run:
         save_state(state_file, state)
@@ -402,7 +418,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default="mp3",
         help="Audio file extension/codec for downloads (default: mp3), e.g. mp3, ogg, opus, m4a, flac",
     )
-
     args = parser.parse_args(argv)
 
     if not args.lastfm_api_key:
