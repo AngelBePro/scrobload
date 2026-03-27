@@ -9,7 +9,7 @@ import subprocess
 import sys
 import importlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -17,6 +17,8 @@ import requests
 
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+MUSICBRAINZ_API_URL = "https://musicbrainz.org/ws/2/recording/"
+MUSICBRAINZ_USER_AGENT = "scrobload/1.0 (https://github.com/AngelBePro/scrobload)"
 DEFAULT_OUTPUT_DIR = os.getenv("SCROBLOAD_OUTPUT_DIR", "downloads")
 STATE_FILE_NAME = ".scrobload_state.json"
 
@@ -35,6 +37,9 @@ class Track:
     title: str
     artist: str
     album: str | None = None
+    year: str | None = None
+    track_number: int | None = None
+    genre: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -97,6 +102,140 @@ def fetch_recent_scrobbles(user: str, api_key: str, limit: int, unique: bool) ->
         tracks.append(track)
 
     return tracks
+
+
+def fetch_metadata_from_musicbrainz(artist: str, title: str) -> dict:
+    """Look up album, year, track number, and genre from MusicBrainz."""
+    metadata: dict = {}
+    try:
+        # Query MusicBrainz for the recording
+        query = f'artist:"{artist}" AND recording:"{title}"'
+        params = {
+            "query": query,
+            "fmt": "json",
+            "limit": 1,
+        }
+        headers = {"User-Agent": MUSICBRAINZ_USER_AGENT}
+        response = requests.get(MUSICBRAINZ_API_URL, params=params, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return metadata
+
+        payload = response.json()
+        recordings = payload.get("recordings", [])
+        if not recordings:
+            return metadata
+
+        recording = recordings[0]
+
+        # Get album from release list
+        releases = recording.get("releases", [])
+        if releases:
+            release = releases[0]
+            album_name = release.get("title", "").strip()
+            if album_name:
+                metadata["album"] = album_name
+
+            # Get year from release date
+            date = release.get("date", "").strip()
+            if date:
+                year_match = re.match(r"^(\d{4})", date)
+                if year_match:
+                    metadata["year"] = year_match.group(1)
+
+            # Get track number
+            media = release.get("media", [])
+            if media:
+                tracks_list = media[0].get("tracks", [])
+                if tracks_list:
+                    track_num = tracks_list[0].get("number")
+                    if track_num and track_num.isdigit():
+                        metadata["track_number"] = int(track_num)
+
+        # Get genre from tags
+        tags = recording.get("tags", [])
+        if tags:
+            # Sort by count (highest first) and take the top genre
+            sorted_tags = sorted(tags, key=lambda t: t.get("count", 0), reverse=True)
+            top_tag = sorted_tags[0].get("name", "").strip()
+            if top_tag:
+                metadata["genre"] = top_tag
+
+    except Exception:
+        pass
+
+    return metadata
+
+
+def extract_youtube_metadata(ydl_result: dict) -> dict:
+    """Extract useful metadata from a yt-dlp download result."""
+    metadata: dict = {}
+
+    if not isinstance(ydl_result, dict):
+        return metadata
+
+    # Try to extract album from YouTube video metadata
+    album = ydl_result.get("album")
+    if album:
+        metadata["album"] = str(album).strip()
+
+    # Extract from description if structured (some music videos have metadata in description)
+    description = ydl_result.get("description", "")
+    if description:
+        # Look for common patterns in music video descriptions
+        album_match = re.search(r"(?:Album|Álbum|EP)[:\s]+(.+?)(?:\n|$)", description, re.IGNORECASE)
+        if album_match and "album" not in metadata:
+            album_text = album_match.group(1).strip()
+            if album_text and len(album_text) < 200:
+                metadata["album"] = album_text
+
+        # Try to extract genre from description
+        genre_match = re.search(r"(?:Genre|Género)[:\s]+(.+?)(?:\n|$)", description, re.IGNORECASE)
+        if genre_match:
+            genre_text = genre_match.group(1).strip()
+            if genre_text and len(genre_text) < 100:
+                metadata["genre"] = genre_text
+
+    # Extract from channel/uploader as album artist hint
+    uploader = ydl_result.get("uploader", "")
+    if uploader:
+        metadata["youtube_uploader"] = uploader
+
+    return metadata
+
+
+def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, use_musicbrainz: bool = True) -> Track:
+    """Enrich a track with metadata from multiple sources.
+    
+    Priority: Track's existing data > YouTube metadata > MusicBrainz metadata
+    """
+    updates: dict = {}
+
+    # Start with YouTube metadata as fallback
+    if youtube_metadata:
+        if not track.album and youtube_metadata.get("album"):
+            updates["album"] = youtube_metadata["album"]
+        if not track.genre and youtube_metadata.get("genre"):
+            updates["genre"] = youtube_metadata["genre"]
+
+    # Try MusicBrainz for missing metadata
+    if use_musicbrainz:
+        needs_mb = not track.album or not track.year or not track.track_number or not track.genre
+        # Only if we still have gaps after YouTube metadata
+        if needs_mb or not updates.get("album"):
+            mb_meta = fetch_metadata_from_musicbrainz(track.artist, track.title)
+            if mb_meta:
+                if not track.album and not updates.get("album") and mb_meta.get("album"):
+                    updates["album"] = mb_meta["album"]
+                if not track.year and mb_meta.get("year"):
+                    updates["year"] = mb_meta["year"]
+                if not track.track_number and mb_meta.get("track_number"):
+                    updates["track_number"] = mb_meta["track_number"]
+                if not track.genre and not updates.get("genre") and mb_meta.get("genre"):
+                    updates["genre"] = mb_meta["genre"]
+
+    if updates:
+        return replace(track, **updates)
+    return track
 
 
 def load_spotify_likes(limit: int | None = None) -> set[tuple[str, str]]:
@@ -211,7 +350,11 @@ def save_state(state_file: Path, state: dict) -> None:
 
 
 def apply_metadata_tags(file_path: Path, track: Track) -> None:
-    """Write artist/title/album metadata so media servers can categorize tracks."""
+    """Write metadata tags so media servers can categorize tracks.
+    
+    Tags written: title, artist, albumartist, album, date, track number, genre.
+    Requires ffmpeg to be available on the system.
+    """
     if not file_path.exists():
         return
 
@@ -238,6 +381,15 @@ def apply_metadata_tags(file_path: Path, track: Track) -> None:
 
     if track.album:
         cmd.extend(["-metadata", f"album={track.album}"])
+
+    if track.year:
+        cmd.extend(["-metadata", f"date={track.year}"])
+
+    if track.track_number is not None:
+        cmd.extend(["-metadata", f"track={track.track_number}"])
+
+    if track.genre:
+        cmd.extend(["-metadata", f"genre={track.genre}"])
 
     cmd.append(str(tmp_path))
 
@@ -345,7 +497,24 @@ def download_tracks(
                                     f.rename(final_path)
                                     break
                         
-                        apply_metadata_tags(final_path, track)
+                        # Enrich track metadata from YouTube result and MusicBrainz
+                        yt_meta = extract_youtube_metadata(resolved)
+                        enriched_track = enrich_track_metadata(track, youtube_metadata=yt_meta)
+                        
+                        if enriched_track != track:
+                            meta_parts = []
+                            if enriched_track.album and not track.album:
+                                meta_parts.append(f"album={enriched_track.album}")
+                            if enriched_track.year and not track.year:
+                                meta_parts.append(f"year={enriched_track.year}")
+                            if enriched_track.genre and not track.genre:
+                                meta_parts.append(f"genre={enriched_track.genre}")
+                            if enriched_track.track_number and not track.track_number:
+                                meta_parts.append(f"track={enriched_track.track_number}")
+                            if meta_parts:
+                                print(f"           enriched metadata: {', '.join(meta_parts)}")
+                        
+                        apply_metadata_tags(final_path, enriched_track)
                         downloads_state[track.key_str] = str(final_path)
                     except Exception as e:
                         print(f"[download] error processing file: {e}")
@@ -417,6 +586,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--audio-format",
         default="mp3",
         help="Audio file extension/codec for downloads (default: mp3), e.g. mp3, ogg, opus, m4a, flac",
+    )
+    parser.add_argument(
+        "--no-musicbrainz",
+        action="store_true",
+        help="Disable MusicBrainz metadata enrichment (faster downloads, less metadata)",
     )
     args = parser.parse_args(argv)
 
