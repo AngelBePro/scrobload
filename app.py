@@ -88,14 +88,10 @@ def fetch_recent_scrobbles(user: str, api_key: str, limit: int, unique: bool) ->
 
     for item in raw_tracks:
         artist = item.get("artist", {}).get("#text", "").strip()
+        # Extract only first artist when multiple are present (split on common separators)
+        artist = re.split(r'\s*(?:&|,| x | ft\.?| feat\.?| vs\.?| with )\s*', artist, flags=re.IGNORECASE)[0].strip()
         title = item.get("name", "").strip()
         album = item.get("album", {}).get("#text", "").strip()
-        
-        # Filter out placeholder album names for singles
-        if album and album.lower() in ["[unknown album]", "unknown album", "unknown"]:
-            album = None
-        else:
-            album = album or None
 
         if not artist or not title:
             continue
@@ -173,7 +169,78 @@ def fetch_metadata_from_musicbrainz(artist: str, title: str) -> dict:
     return metadata
 
 
-def extract_youtube_metadata(ydl_result: dict) -> dict:
+def parse_youtube_title(youtube_title: str, expected_artist: str, expected_title: str | None = None) -> str | None:
+    """Parse YouTube video title to extract track name.
+    
+    Handles titles with arbitrary prefixes like genres, tags, etc before the actual track.
+    Supports formats:
+      - "Artist - Track Name"
+      - "Genre - Artist - Track Name"
+      - "Tag - Another Tag - Artist - Track Name"
+      - "Any Prefix - Track Name"
+    
+    If expected_title is provided, will try to find the matching title at the end after any number of separators.
+    """
+    if not youtube_title:
+        return None
+    
+    expected_artist_lower = normalize_text(expected_artist)
+    remaining = youtube_title.strip()
+    
+    # First try standard artist prefix stripping (handles multiple artist prefixes)
+    while True:
+        if " - " not in remaining:
+            break
+            
+        parts = remaining.split(" - ", 1)
+        if len(parts) != 2:
+            break
+            
+        prefix_part = parts[0].strip()
+        prefix_part_normalized = normalize_text(prefix_part)
+        
+        if expected_artist_lower == prefix_part_normalized:
+            remaining = parts[1].strip()
+        else:
+            # If we have expected title, check if this prefix is NOT our title and skip it (genre/tag)
+            if expected_title is not None:
+                expected_title_normalized = normalize_text(expected_title)
+                current_remaining_normalized = normalize_text(remaining)
+                
+                # If remaining already ends with our title, stop stripping
+                if current_remaining_normalized.endswith(expected_title_normalized):
+                    break
+                
+                # Otherwise allow stripping any prefix (genres, tags, etc.)
+                remaining = parts[1].strip()
+            else:
+                break
+    
+    # Also check if the remaining still starts with artist name even without proper separator
+    remaining_lower = remaining.lower()
+    artist_prefix = expected_artist_lower + ' '
+    if remaining_lower.startswith(artist_prefix):
+        remaining = remaining[len(expected_artist):].strip()
+        # Remove leading dash if present after stripping artist
+        if remaining.startswith('-'):
+            remaining = remaining[1:].strip()
+    
+    # If we have expected title, verify we actually got it
+    if expected_title is not None:
+        expected_normalized = normalize_text(expected_title)
+        remaining_normalized = normalize_text(remaining)
+        
+        if remaining_normalized == expected_normalized:
+            return remaining
+    
+    # Otherwise return if we removed something and result is not empty
+    elif remaining != youtube_title.strip() and remaining:
+        return remaining
+    
+    return None
+
+
+def extract_youtube_metadata(ydl_result: dict, expected_artist: str | None = None) -> dict:
     """Extract useful metadata from a yt-dlp download result."""
     metadata: dict = {}
 
@@ -188,6 +255,60 @@ def extract_youtube_metadata(ydl_result: dict) -> dict:
         if album_str.lower() not in ["[unknown album]", "unknown album", "unknown"]:
             metadata["album"] = album_str
 
+    # Check if video contains multiple songs
+    title = ydl_result.get("title", "")
+    description = ydl_result.get("description", "")
+    if title and description:
+        # Check for common multi-song indicators in title
+        multi_song_indicators = [
+            "mix", "mashup", "medley", "compilation", "megamix", "playlist",
+            "top songs", "best songs", "greatest hits", "full album",
+            "album playlist", "song collection", "music mix"
+        ]
+        title_lower = title.lower()
+        is_multi_song = any(indicator in title_lower for indicator in multi_song_indicators)
+
+        # Additional checks for multi-song videos
+        if not is_multi_song:
+
+            # Check for multiple song separators - only if they are actually separating different tracks
+            # Only flag as multi-song if there are 3 OR MORE " - " separators (allow 1 or 2 for standard Artist - Title format)
+            if title.count(" - ") > 2 or title.count(":") > 2:
+                is_multi_song = True
+
+        # Check description for multi-song patterns
+        if not is_multi_song and description:
+            # Look for track listings or multiple song mentions
+            track_listing_pattern = r'\d+\.\s*[^.\n]+'
+            if re.search(track_listing_pattern, description, re.IGNORECASE):
+                is_multi_song = True
+
+            # Look for common multi-song phrases in description
+            multi_song_desc_indicators = [
+                "tracklist", "track list", "songs included"
+            ]
+            desc_lower = description.lower()
+            if any(indicator in desc_lower for indicator in multi_song_desc_indicators):
+                is_multi_song = True
+
+        if is_multi_song:
+            metadata["is_multi_song"] = True
+            metadata["multi_song_reason"] = "Title/description suggests multiple songs"
+
+    # Check for modified / sped up / slowed down versions
+    title_lower = title.lower()
+    modified_indicators = [
+        "sped up", "speed up", "fast version", "slowed down", "slow down",
+        "slow version", "reverb", "slowed + reverb", "sped + reverb",
+        "nightcore", "daycore", "remix", "acoustic", "instrumental",
+        "cover", "live", "live version", "8d audio", "bass boosted",
+        "slowed & reverb", "sped & reverb", "edit", "version"
+    ]
+    
+    is_modified_version = any(indicator in title_lower for indicator in modified_indicators)
+    if is_modified_version:
+        metadata["is_modified_version"] = True
+        metadata["modified_reason"] = "Title indicates modified track version detected"
     # Extract year from upload date
     upload_date = ydl_result.get("upload_date", "")
     if upload_date and len(upload_date) >= 4:
@@ -233,24 +354,42 @@ def extract_youtube_metadata(ydl_result: dict) -> dict:
             track_num = track_match.group(1)
             if track_num.isdigit():
                 metadata["track_number"] = int(track_num)
+        
+        # Try to extract track name from YouTube title if it follows "Artist - Track" format
+        if expected_artist:
+            parsed_track_name = parse_youtube_title(title, expected_artist)
+            if parsed_track_name:
+                metadata["youtube_track_name"] = parsed_track_name
 
     return metadata
 
 
 def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, use_musicbrainz: bool = True) -> Track:
     """Enrich a track with metadata from multiple sources.
-    
+
     Priority: Track's existing data > YouTube metadata > MusicBrainz metadata
     Only fills in missing fields - never overwrites existing data.
     """
     updates: dict = {}
 
+    # Skip enrichment if video contains multiple songs
+    if youtube_metadata and youtube_metadata.get("is_multi_song"):
+        return track
     # Start with YouTube metadata as fallback (only for missing fields)
     if youtube_metadata:
         if not track.album and youtube_metadata.get("album"):
             updates["album"] = youtube_metadata["album"]
         if not track.genre and youtube_metadata.get("genre"):
             updates["genre"] = youtube_metadata["genre"]
+        # If YouTube title had "Artist - Track" format, use the parsed track name
+        # Always clean existing title if we found a cleaner version without duplicate artist
+        if youtube_metadata.get("youtube_track_name"):
+            # Only update if parsed title is different and valid
+            parsed_title = youtube_metadata["youtube_track_name"].strip()
+            if parsed_title and parsed_title != track.title:
+                # Verify parsed title is actually shorter (we removed duplicate artist)
+                if len(parsed_title) < len(track.title):
+                    updates["title"] = parsed_title
 
     # Try MusicBrainz for missing metadata (only if enabled and we still have gaps)
     if use_musicbrainz:
@@ -465,7 +604,7 @@ def download_tracks(
     audio_format: str,
     use_musicbrainz: bool = True,
     no_metadata: bool = False,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     yt_dlp_module = require_package("yt_dlp", "yt-dlp")
     YoutubeDL = yt_dlp_module.YoutubeDL
 
@@ -476,6 +615,7 @@ def download_tracks(
 
     downloaded = 0
     skipped_deleted = 0
+    skipped_multi_song = 0
 
     ydl_opts = {
         "quiet": False,
@@ -510,31 +650,101 @@ def download_tracks(
                 skipped_deleted += 1
                 continue
 
-            query = f"ytsearch1:{track.query} audio"
+            # Search for first 5 results to find an original unmodified track
+            # Removed "audio" suffix - this was excluding official music videos which are the highest quality sources
+            query = f"ytsearch5:{track.query}"
             print(f"[download {index}] {track.artist} - {track.title}")
             if dry_run:
                 print(f"           dry-run query => {query}")
                 downloaded += 1
                 continue
 
-            result = ydl.extract_info(query, download=True)
-            if result:
+            result = ydl.extract_info(query, download=False)
+            selected_entry = None
+            
+            if result and isinstance(result, dict) and result.get("entries"):
+                entries = [e for e in result.get("entries") or [] if e]
+                
+                # Check each result until we find an original unmodified track
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    
+                    yt_meta = extract_youtube_metadata(entry, expected_artist=track.artist)
+                    
+                    # Skip multi-song videos
+                    if yt_meta.get("is_multi_song"):
+                        print(f"           skipping result: multiple songs")
+                        continue
+                    
+                    # Skip modified / sped up / slowed down versions
+                    if yt_meta.get("is_modified_version"):
+                        print(f"           skipping result: {yt_meta.get('modified_reason', 'modified version')}")
+                        continue
+                    
+                    # Check if video title actually contains our track title (handle genre prefixes)
+                    video_title_normalized = normalize_text(entry.get("title", ""))
+                    track_title_normalized = normalize_text(track.title)
+                    
+                    # If the video title contains our actual track name, accept it even if artist prefix wasn't matching
+                    # This handles cases like "Breakcore - I wish you stayed.." where genre comes first
+                    if track_title_normalized in video_title_normalized:
+                        selected_entry = entry
+                        break
+                    
+                    # Also check parsed title if we got one
+                    if yt_meta.get("youtube_track_name"):
+                        parsed_normalized = normalize_text(yt_meta["youtube_track_name"])
+                        if parsed_normalized == track_title_normalized:
+                            selected_entry = entry
+                            break
+                    
+                    # Fallback: allow if it's the first result and looks close enough
+                    if entry == entries[0] and len(track_title_normalized) > 3:
+                        selected_entry = entry
+                        break
+            
+            if not selected_entry:
+                print(f"           no valid original version found in search results, skipping")
+                continue
+            
+            # Download only the selected valid track
+            resolved = ydl.extract_info(selected_entry.get("webpage_url"), download=True)
+            if resolved:
                 downloaded += 1
-                resolved = result
-                if isinstance(result, dict) and result.get("entries"):
-                    entries = result.get("entries") or []
-                    if entries:
-                        resolved = entries[0]
-
                 if isinstance(resolved, dict):
                     try:
-                        # Use track info for filename instead of YouTube video metadata
+                        yt_meta = extract_youtube_metadata(resolved, expected_artist=track.artist)
+
+                        if no_metadata:
+                            # Skip metadata enrichment completely
+                            enriched_track = track
+                        else:
+                            # Enrich track metadata from YouTube result and MusicBrainz FIRST
+                            enriched_track = enrich_track_metadata(track, youtube_metadata=yt_meta)
+
+                            if enriched_track != track:
+                                meta_parts = []
+                                if enriched_track.album and not track.album:
+                                    meta_parts.append(f"album={enriched_track.album}")
+                                if enriched_track.year and not track.year:
+                                    meta_parts.append(f"year={enriched_track.year}")
+                                if enriched_track.genre and not track.genre:
+                                    meta_parts.append(f"genre={enriched_track.genre}")
+                                if enriched_track.track_number and not track.track_number:
+                                    meta_parts.append(f"track={enriched_track.track_number}")
+                                if enriched_track.title != track.title:
+                                    meta_parts.append(f"title={enriched_track.title}")
+                                if meta_parts:
+                                    print(f"           enriched metadata: {', '.join(meta_parts)}")
+
+                        # Use the ENRICHED track info for filename, so we get the cleaned title
                         # This prevents metadata mismatch when yt-dlp downloads a different song
-                        safe_artist = re.sub(r'[<>:"/\\|?*]', '_', track.artist)
-                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', track.title)
+                        safe_artist = re.sub(r'[<>:"/\\|?*]', '_', enriched_track.artist)
+                        safe_title = re.sub(r'[<>:"/\\|?*]', '_', enriched_track.title)
                         filename = f"{safe_artist} - {safe_title}.{audio_format}"
                         final_path = (output_dir / filename).resolve()
-                        
+
                         # Move the downloaded file to our desired location
                         downloaded_id = resolved.get('id', '')
                         if downloaded_id:
@@ -548,37 +758,18 @@ def download_tracks(
                                     if f.suffix in ['.mp3', '.m4a', '.ogg', '.opus', '.flac']:
                                         f.rename(final_path)
                                         break
-                        
-                        if no_metadata:
-                            # Skip metadata tagging - save raw file
-                            downloads_state[track.key_str] = str(final_path)
-                        else:
-                            # Enrich track metadata from YouTube result and MusicBrainz
-                            yt_meta = extract_youtube_metadata(resolved)
-                            enriched_track = enrich_track_metadata(track, youtube_metadata=yt_meta)
-                            
-                            if enriched_track != track:
-                                meta_parts = []
-                                if enriched_track.album and not track.album:
-                                    meta_parts.append(f"album={enriched_track.album}")
-                                if enriched_track.year and not track.year:
-                                    meta_parts.append(f"year={enriched_track.year}")
-                                if enriched_track.genre and not track.genre:
-                                    meta_parts.append(f"genre={enriched_track.genre}")
-                                if enriched_track.track_number and not track.track_number:
-                                    meta_parts.append(f"track={enriched_track.track_number}")
-                                if meta_parts:
-                                    print(f"           enriched metadata: {', '.join(meta_parts)}")
-                            
+
+                        if not no_metadata:
                             apply_metadata_tags(final_path, enriched_track)
-                            downloads_state[track.key_str] = str(final_path)
+                        
+                        downloads_state[track.key_str] = str(final_path)
                     except Exception as e:
                         print(f"[download] error processing file: {e}")
 
     if not dry_run:
         save_state(state_file, state)
 
-    return downloaded, skipped_deleted
+    return downloaded, skipped_deleted, skipped_multi_song
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -697,7 +888,7 @@ def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
             "liked_only": bool(args.liked_only),
         }
 
-    downloaded_count, skipped_deleted = download_tracks(
+    downloaded_count, skipped_deleted, skipped_multi_song = download_tracks(
         tracks=selected_tracks,
         output_dir=Path(args.output_dir),
         dry_run=args.dry_run,
