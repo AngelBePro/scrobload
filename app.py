@@ -604,7 +604,7 @@ def download_tracks(
     audio_format: str,
     use_musicbrainz: bool = True,
     no_metadata: bool = False,
-) -> tuple[int, int, int]:
+) -> tuple[int, int]:
     yt_dlp_module = require_package("yt_dlp", "yt-dlp")
     YoutubeDL = yt_dlp_module.YoutubeDL
 
@@ -615,7 +615,6 @@ def download_tracks(
 
     downloaded = 0
     skipped_deleted = 0
-    skipped_multi_song = 0
 
     ydl_opts = {
         "quiet": False,
@@ -769,7 +768,7 @@ def download_tracks(
     if not dry_run:
         save_state(state_file, state)
 
-    return downloaded, skipped_deleted, skipped_multi_song
+    return downloaded, skipped_deleted
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -888,7 +887,7 @@ def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
             "liked_only": bool(args.liked_only),
         }
 
-    downloaded_count, skipped_deleted, skipped_multi_song = download_tracks(
+    downloaded_count, skipped_deleted = download_tracks(
         tracks=selected_tracks,
         output_dir=Path(args.output_dir),
         dry_run=args.dry_run,
