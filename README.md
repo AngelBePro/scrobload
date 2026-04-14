@@ -61,9 +61,12 @@ Audio format control (default: `mp3`):
 
 Metadata tagging for media servers (Navidrome/Jellyfin/Plex):
 
-- Downloaded files are tagged with `title`, `artist`, `albumartist`, and `album` (when available from Last.fm scrobbles).
+- Scrobload enriches tracks primarily from Last.fm (`track.getInfo` + `album.getInfo`) and falls back to YouTube/MusicBrainz when needed.
+- Downloaded files are tagged with `title`, `artist`, `albumartist`, `album`, `date`, `track`, and `genre` when available.
+- Album cover art is fetched from Last.fm first, then MusicBrainz Cover Art Archive as fallback, and embedded when possible.
 - This helps media servers categorize tracks under artist/album views.
 - Requires `ffmpeg` to be available on your system.
+- Already-downloaded tracks are metadata-refreshed on subsequent runs (unless `--no-metadata` is used).
 
 Delete protection (enabled by default):
 
@@ -184,6 +187,6 @@ PKGBUILD assets:
 ## Notes
 
 - Matching is best-effort (`artist + title` normalization).
-- Downloads come from YouTube search results (`ytsearch1`), so exact versions can vary.
+- Downloads come from YouTube search results (`ytsearch5`), so exact versions can vary.
 - Download tracking metadata is stored in `OUTPUT_DIR/.scrobload_state.json`.
 - Use responsibly and in line with your local laws/platform terms.
