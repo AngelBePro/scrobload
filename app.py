@@ -40,6 +40,7 @@ class Track:
     year: str | None = None
     track_number: int | None = None
     genre: str | None = None
+    cover_art_url: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -107,7 +108,7 @@ def fetch_recent_scrobbles(user: str, api_key: str, limit: int, unique: bool) ->
 
 
 def fetch_metadata_from_musicbrainz(artist: str, title: str) -> dict:
-    """Look up album, year, track number, and genre from MusicBrainz."""
+    """Look up album, year, track number, genre, and cover art from MusicBrainz."""
     metadata: dict = {}
     try:
         # Query MusicBrainz for the recording
@@ -133,10 +134,15 @@ def fetch_metadata_from_musicbrainz(artist: str, title: str) -> dict:
         releases = recording.get("releases", [])
         if releases:
             release = releases[0]
+            release_id = (release.get("id") or "").strip()
             album_name = release.get("title", "").strip()
             # Filter out placeholder album names for singles
             if album_name and album_name.lower() not in ["[unknown album]", "unknown album", "unknown"]:
                 metadata["album"] = album_name
+
+            if release_id:
+                # Cover Art Archive fronts MusicBrainz release artwork.
+                metadata["cover_art_url"] = f"https://coverartarchive.org/release/{release_id}/front-500"
 
             # Get year from release date
             date = release.get("date", "").strip()
@@ -166,6 +172,132 @@ def fetch_metadata_from_musicbrainz(artist: str, title: str) -> dict:
     except Exception:
         pass
 
+    return metadata
+
+
+def _lastfm_request(params: dict, timeout: int = 20) -> dict:
+    response = requests.get(LASTFM_API_URL, params=params, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if "error" in payload:
+        raise RuntimeError(f"Last.fm API error {payload['error']}: {payload.get('message', 'unknown error')}")
+    return payload
+
+
+def _extract_year(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r"\b(19\d{2}|20\d{2}|2100)\b", value)
+    return match.group(1) if match else None
+
+
+def _extract_lastfm_image(images: list[dict] | None) -> str | None:
+    if not images:
+        return None
+    preferred_sizes = ("extralarge", "large", "medium", "small")
+    ordered = sorted(
+        images,
+        key=lambda img: preferred_sizes.index(img.get("size")) if img.get("size") in preferred_sizes else 999,
+    )
+    for image in ordered:
+        url = (image.get("#text") or "").strip()
+        if url:
+            return url
+    return None
+
+
+def fetch_metadata_from_lastfm(track: Track, api_key: str) -> dict:
+    """Look up track metadata from Last.fm, with album.getInfo fallback for richer album data."""
+    metadata: dict = {}
+    try:
+        track_payload = _lastfm_request(
+            {
+                "method": "track.getInfo",
+                "artist": track.artist,
+                "track": track.title,
+                "autocorrect": 1,
+                "api_key": api_key,
+                "format": "json",
+            }
+        )
+        track_info = track_payload.get("track", {}) if isinstance(track_payload, dict) else {}
+        if not isinstance(track_info, dict):
+            return metadata
+
+        album_info = track_info.get("album")
+        if isinstance(album_info, dict):
+            album_title = (album_info.get("title") or "").strip()
+            if album_title and album_title.lower() not in {"[unknown album]", "unknown album", "unknown"}:
+                metadata["album"] = album_title
+            image_url = _extract_lastfm_image(album_info.get("image"))
+            if image_url:
+                metadata["cover_art_url"] = image_url
+
+            track_rank = str(album_info.get("@attr", {}).get("position", "")).strip()
+            if track_rank.isdigit():
+                metadata["track_number"] = int(track_rank)
+
+        toptags = track_info.get("toptags", {}).get("tag", [])
+        if isinstance(toptags, dict):
+            toptags = [toptags]
+        if isinstance(toptags, list):
+            for tag in toptags:
+                if isinstance(tag, dict):
+                    genre = (tag.get("name") or "").strip()
+                    if genre:
+                        metadata["genre"] = genre
+                        break
+
+        if track_info.get("wiki"):
+            year = _extract_year(track_info.get("wiki", {}).get("published") or track_info.get("wiki", {}).get("summary"))
+            if year:
+                metadata["year"] = year
+
+        album_name_for_lookup = metadata.get("album") or track.album
+        if album_name_for_lookup:
+            try:
+                album_payload = _lastfm_request(
+                    {
+                        "method": "album.getInfo",
+                        "artist": track.artist,
+                        "album": album_name_for_lookup,
+                        "autocorrect": 1,
+                        "api_key": api_key,
+                        "format": "json",
+                    }
+                )
+                album_obj = album_payload.get("album", {}) if isinstance(album_payload, dict) else {}
+                if isinstance(album_obj, dict):
+                    if not metadata.get("cover_art_url"):
+                        album_image_url = _extract_lastfm_image(album_obj.get("image"))
+                        if album_image_url:
+                            metadata["cover_art_url"] = album_image_url
+
+                    if not metadata.get("genre"):
+                        album_tags = album_obj.get("tags", {}).get("tag", [])
+                        if isinstance(album_tags, dict):
+                            album_tags = [album_tags]
+                        if isinstance(album_tags, list):
+                            for tag in album_tags:
+                                if isinstance(tag, dict):
+                                    genre = (tag.get("name") or "").strip()
+                                    if genre:
+                                        metadata["genre"] = genre
+                                        break
+
+                    if not metadata.get("year"):
+                        wiki = album_obj.get("wiki", {})
+                        year = _extract_year(
+                            (wiki.get("published") if isinstance(wiki, dict) else None)
+                            or (wiki.get("summary") if isinstance(wiki, dict) else None)
+                            or album_obj.get("releasedate")
+                        )
+                        if year:
+                            metadata["year"] = year
+            except Exception:
+                pass
+    except Exception:
+        pass
     return metadata
 
 
@@ -364,10 +496,15 @@ def extract_youtube_metadata(ydl_result: dict, expected_artist: str | None = Non
     return metadata
 
 
-def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, use_musicbrainz: bool = True) -> Track:
+def enrich_track_metadata(
+    track: Track,
+    lastfm_api_key: str,
+    youtube_metadata: dict | None = None,
+    use_musicbrainz: bool = True,
+) -> Track:
     """Enrich a track with metadata from multiple sources.
 
-    Priority: Track's existing data > YouTube metadata > MusicBrainz metadata
+    Priority: Track's existing data > Last.fm metadata > YouTube metadata > MusicBrainz metadata
     Only fills in missing fields - never overwrites existing data.
     """
     updates: dict = {}
@@ -375,7 +512,23 @@ def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, us
     # Skip enrichment if video contains multiple songs
     if youtube_metadata and youtube_metadata.get("is_multi_song"):
         return track
-    # Start with YouTube metadata as fallback (only for missing fields)
+    # Use Last.fm first for rich canonical music metadata.
+    needs_lastfm = not all([track.album, track.year, track.track_number, track.genre, track.cover_art_url])
+    if needs_lastfm:
+        lastfm_meta = fetch_metadata_from_lastfm(track, lastfm_api_key)
+        if lastfm_meta:
+            if not track.album and lastfm_meta.get("album"):
+                updates["album"] = lastfm_meta["album"]
+            if not track.year and lastfm_meta.get("year"):
+                updates["year"] = lastfm_meta["year"]
+            if not track.track_number and lastfm_meta.get("track_number"):
+                updates["track_number"] = lastfm_meta["track_number"]
+            if not track.genre and lastfm_meta.get("genre"):
+                updates["genre"] = lastfm_meta["genre"]
+            if not track.cover_art_url and lastfm_meta.get("cover_art_url"):
+                updates["cover_art_url"] = lastfm_meta["cover_art_url"]
+
+    # Then use YouTube metadata as fallback (only for missing fields)
     if youtube_metadata:
         if not track.album and youtube_metadata.get("album"):
             updates["album"] = youtube_metadata["album"]
@@ -395,12 +548,13 @@ def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, us
     if use_musicbrainz:
         # Check what metadata we're still missing
         needs_album = not track.album and not updates.get("album")
-        needs_year = not track.year
-        needs_track_number = not track.track_number
+        needs_year = not track.year and not updates.get("year")
+        needs_track_number = not track.track_number and not updates.get("track_number")
         needs_genre = not track.genre and not updates.get("genre")
+        needs_cover_art = not track.cover_art_url and not updates.get("cover_art_url")
         
         # Only query MusicBrainz if we have missing metadata
-        if needs_album or needs_year or needs_track_number or needs_genre:
+        if needs_album or needs_year or needs_track_number or needs_genre or needs_cover_art:
             try:
                 mb_meta = fetch_metadata_from_musicbrainz(track.artist, track.title)
                 if mb_meta:
@@ -413,6 +567,8 @@ def enrich_track_metadata(track: Track, youtube_metadata: dict | None = None, us
                         updates["track_number"] = mb_meta["track_number"]
                     if needs_genre and mb_meta.get("genre"):
                         updates["genre"] = mb_meta["genre"]
+                    if needs_cover_art and mb_meta.get("cover_art_url"):
+                        updates["cover_art_url"] = mb_meta["cover_art_url"]
             except Exception as e:
                 # Silently continue if MusicBrainz fails - don't lose existing metadata
                 pass
@@ -545,23 +701,32 @@ def apply_metadata_tags(file_path: Path, track: Track) -> None:
     # Keep the original media extension so ffmpeg can infer the output muxer.
     # Example: "song.mp3" -> "song.tagtmp.mp3" (not "song.mp3.tagtmp").
     tmp_path = file_path.with_name(f"{file_path.stem}.tagtmp{file_path.suffix}")
+    cover_path: Path | None = None
+
+    if track.cover_art_url:
+        cover_candidate = file_path.with_name(f"{file_path.stem}.cover.jpg")
+        try:
+            image_resp = requests.get(track.cover_art_url, timeout=20)
+            if image_resp.status_code == 200 and image_resp.content:
+                cover_candidate.write_bytes(image_resp.content)
+                cover_path = cover_candidate
+        except Exception:
+            cover_path = None
 
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         str(file_path),
-        "-map",
-        "0",
-        "-c",
-        "copy",
-        "-metadata",
-        f"title={track.title}",
-        "-metadata",
-        f"artist={track.artist}",
-        "-metadata",
-        f"albumartist={track.artist}",
     ]
+
+    if cover_path:
+        cmd.extend(["-i", str(cover_path), "-map", "0", "-map", "1", "-c", "copy"])
+        cmd.extend(["-id3v2_version", "3", "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)"])
+    else:
+        cmd.extend(["-map", "0", "-c", "copy"])
+
+    cmd.extend(["-metadata", f"title={track.title}", "-metadata", f"artist={track.artist}", "-metadata", f"albumartist={track.artist}"])
 
     if track.album:
         cmd.extend(["-metadata", f"album={track.album}"])
@@ -583,6 +748,8 @@ def apply_metadata_tags(file_path: Path, track: Track) -> None:
             print(f"[metadata] failed for {file_path.name}: {result.stderr.strip()}")
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
+            if cover_path and cover_path.exists():
+                cover_path.unlink(missing_ok=True)
             return
 
         tmp_path.replace(file_path)
@@ -594,6 +761,9 @@ def apply_metadata_tags(file_path: Path, track: Track) -> None:
         print(f"[metadata] unexpected error for {file_path.name}: {exc}")
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+    finally:
+        if cover_path and cover_path.exists():
+            cover_path.unlink(missing_ok=True)
 
 
 def download_tracks(
@@ -602,6 +772,7 @@ def download_tracks(
     dry_run: bool,
     prevent_redownload_deleted: bool,
     audio_format: str,
+    lastfm_api_key: str,
     use_musicbrainz: bool = True,
     no_metadata: bool = False,
 ) -> tuple[int, int]:
@@ -640,7 +811,18 @@ def download_tracks(
 
             if previous_path and previous_path.exists():
                 print(f"[download {index}] {track.artist} - {track.title}")
-                print("           already downloaded, skipping")
+                print("           already downloaded, refreshing metadata")
+                if not no_metadata:
+                    try:
+                        enriched_existing = enrich_track_metadata(
+                            track,
+                            lastfm_api_key=lastfm_api_key,
+                            youtube_metadata=None,
+                            use_musicbrainz=use_musicbrainz,
+                        )
+                        apply_metadata_tags(previous_path, enriched_existing)
+                    except Exception as e:
+                        print(f"           metadata refresh failed: {e}")
                 continue
 
             if prevent_redownload_deleted and previous_path and not previous_path.exists():
@@ -720,7 +902,12 @@ def download_tracks(
                             enriched_track = track
                         else:
                             # Enrich track metadata from YouTube result and MusicBrainz FIRST
-                            enriched_track = enrich_track_metadata(track, youtube_metadata=yt_meta)
+                            enriched_track = enrich_track_metadata(
+                                track,
+                                lastfm_api_key=lastfm_api_key,
+                                youtube_metadata=yt_meta,
+                                use_musicbrainz=use_musicbrainz,
+                            )
 
                             if enriched_track != track:
                                 meta_parts = []
@@ -732,6 +919,8 @@ def download_tracks(
                                     meta_parts.append(f"genre={enriched_track.genre}")
                                 if enriched_track.track_number and not track.track_number:
                                     meta_parts.append(f"track={enriched_track.track_number}")
+                                if enriched_track.cover_art_url and not track.cover_art_url:
+                                    meta_parts.append("cover_art=lastfm")
                                 if enriched_track.title != track.title:
                                     meta_parts.append(f"title={enriched_track.title}")
                                 if meta_parts:
@@ -893,6 +1082,7 @@ def run_once(args: argparse.Namespace) -> dict[str, int | bool]:
         dry_run=args.dry_run,
         prevent_redownload_deleted=not args.redownload_deleted,
         audio_format=args.audio_format,
+        lastfm_api_key=args.lastfm_api_key,
         use_musicbrainz=not args.no_musicbrainz,
         no_metadata=args.no_metadata,
     )
