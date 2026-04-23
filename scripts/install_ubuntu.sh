@@ -15,7 +15,7 @@ RUN_GROUP="$(id -gn "$RUN_USER")"
 
 LASTFM_USER=""
 LIKED_ONLY="true"
-PROVIDERS="spotify,ytmusic"
+PROVIDERS="ytmusic"
 YTMUSIC_AUTH="headers_auth.json"
 LIMIT="50"
 
