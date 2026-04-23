@@ -19,7 +19,7 @@ SPOTIPY_CLIENT_SECRET=
 SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
 # Runtime args consumed by systemd service:
-SCROBLOAD_ARGS="--lastfm-user CHANGE_ME --liked-only --providers spotify,ytmusic --ytmusic-auth /usr/lib/scrobload/headers_auth.json --output-dir /var/lib/scrobload/downloads"
+SCROBLOAD_ARGS="--lastfm-user CHANGE_ME --liked-only --providers ytmusic --ytmusic-auth /usr/lib/scrobload/headers_auth.json --output-dir /var/lib/scrobload/downloads"
 EOF_ENV
   chmod 600 /etc/scrobload.env
 fi

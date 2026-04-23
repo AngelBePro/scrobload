@@ -29,7 +29,17 @@ Liked-only run:
 python app.py \
   --lastfm-user YOUR_LASTFM_USERNAME \
   --liked-only \
-  --providers spotify,ytmusic \
+  --providers ytmusic \
+  --ytmusic-auth headers_auth.json
+```
+
+Liked-only run (YouTube Music + Spotify):
+
+```bash
+python app.py \
+  --lastfm-user YOUR_LASTFM_USERNAME \
+  --liked-only \
+  --providers ytmusic,spotify \
   --ytmusic-auth headers_auth.json
 ```
 
@@ -97,7 +107,7 @@ export LASTFM_API_KEY="your_lastfm_api_key"
 export SCROBLOAD_OUTPUT_DIR="/path/to/downloads"
 ```
 
-### Spotify (only if using provider `spotify`)
+### Spotify (optional, only if providers include `spotify`)
 
 ```bash
 export SPOTIPY_CLIENT_ID="your_client_id"
@@ -123,7 +133,7 @@ sudo ./scripts/install_ubuntu.sh --lastfm-user YOUR_LASTFM_USERNAME
 Useful flags:
 - `--interval 15min`
 - `--all-scrobbles`
-- `--providers spotify,ytmusic`
+- `--providers ytmusic`
 - `--ytmusic-auth headers_auth.json`
 
 To run as a long-running background process with systemd,
@@ -187,6 +197,6 @@ PKGBUILD assets:
 ## Notes
 
 - Matching is best-effort (`artist + title` normalization).
-- Downloads come from YouTube search results (`ytsearch5`), so exact versions can vary.
+- Downloads are searched via YouTube Music (`music.youtube.com`) for more song-focused results, but exact versions can still vary.
 - Download tracking metadata is stored in `OUTPUT_DIR/.scrobload_state.json`.
 - Use responsibly and in line with your local laws/platform terms.

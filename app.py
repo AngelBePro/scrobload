@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import quote_plus
 
 import requests
 
@@ -831,9 +832,9 @@ def download_tracks(
                 skipped_deleted += 1
                 continue
 
-            # Search for first 5 results to find an original unmodified track
-            # Removed "audio" suffix - this was excluding official music videos which are the highest quality sources
-            query = f"ytsearch5:{track.query}"
+            # Search YouTube Music first for more accurate song matching.
+            # yt-dlp supports this via the music.youtube.com search URL extractor.
+            query = f"https://music.youtube.com/search?q={quote_plus(track.query)}"
             print(f"[download {index}] {track.artist} - {track.title}")
             if dry_run:
                 print(f"           dry-run query => {query}")
@@ -983,8 +984,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--providers",
-        default="spotify,ytmusic",
-        help="Comma-separated liked providers to use when --liked-only is set (spotify,ytmusic)",
+        default="ytmusic",
+        help="Comma-separated liked providers when --liked-only is set (default: ytmusic; available: ytmusic,spotify)",
     )
     parser.add_argument(
         "--ytmusic-auth",
